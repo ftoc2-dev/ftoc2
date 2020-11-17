@@ -1,0 +1,816 @@
+\documentclass{amsart}
+
+\usepackage{amssymb}
+
+\def\vec#1{\mathchoice{\mbox{\boldmath$\displaystyle#1$}}
+	{\mbox{\boldmath$\textstyle#1$}}
+	{\mbox{\boldmath$\scriptstyle#1$}}
+	{\mbox{\boldmath$\scriptscriptstyle#1$}}}
+\newcommand{\floor}[1]{\left\lfloor #1\right\rfloor}
+\newcommand{\ceil}[1]{\left\lceil #1\right\rceil}
+\newcommand{\F}{\mathbb{F}}
+\newcommand{\N}{\mathbb{N}}
+
+\newcommand{\Input}{\textbf{Input:}}
+\newcommand{\Output}{\textbf{Output:}}
+
+\newcommand{\field}{\normalfont\texttt{gf256}}
+\newcommand{\transforms}{\normalfont\texttt{transforms}}
+\newcommand{\hermite}{\normalfont\texttt{hermite}}
+\newcommand{\encode}{\normalfont\texttt{encode}}
+
+\newcommand{\XtoN}{LCHToNewton}
+\newcommand{\NtoX}{NewtonToLCH}
+\newcommand{\XtoL}{LCHEval}
+\newcommand{\LtoX}{LCHInterp}
+\newcommand{\lsXtoL}{LowSpaceLCHEval}
+\newcommand{\lsLtoX}{LowSpaceLCHInterp}
+\newcommand{\XtoM}{LCHToMonomial}
+\newcommand{\MtoX}{MonomialToLCH}
+\newcommand{\Taylor}{TaylorExpansion}
+\newcommand{\InverseTaylor}{InverseTaylorExpansion}
+
+\makeatletter
+\newcommand*{\bdiv}{%
+	\nonscript\mskip-\medmuskip\mkern5mu%
+	\mathbin{\operator@font div}\penalty900\mkern5mu%
+	\nonscript\mskip-\medmuskip
+}
+\makeatother
+
+\let\originalleft\left
+\let\originalright\right
+\renewcommand{\left}{\mathopen{}\mathclose\bgroup\originalleft}
+\renewcommand{\right}{\aftergroup\egroup\originalright}
+
+\newenvironment{inputs}{\Input\par\begin{tabular}{@{}rcl}}{\end{tabular}}
+\newenvironment{outputs}{\Output\par}{}
+
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{1ex plus 0.5ex minus 0ex}
+
+\begin{document}
+	
+\title{\lowercase{ftoc2}: Fast transforms over characteristic 2}
+\maketitle
+
+\section{\field{}: Implementation of arithmetic in $\F_{2^8}$}
+
+The module \field{} implements field arithmetic for $\F_{2^8}$. We let
+$\F_{2^8}=\F_2(\alpha)$ for a root $\alpha$ of $x^8+x^4+x^3+x^2+1$, and
+$\{\beta_0,\dotsc,\beta_7\}$ be the basis of the extension obtained by letting
+$\beta_7=\alpha^5$ and $\beta_i=\beta^2_{i+1}-\beta_{i+1}$ for
+$i\in\{0,\dotsc,6\}$. This construction yields a so-called Cantor basis (see
+\cite[Appendix~A]{gao2010}). Define maps $[{}\cdot{}]_k:\N\rightarrow\{0,1\}$
+for $k\in\N$ by
+\begin{equation*}
+	i=\sum_{k\in\N}2^k[i]_k
+	\quad\text{for $i\in\N$}.
+\end{equation*}
+The field $\F_{2^8}$ is enumerated as $\{\omega_0,\dotsc,\omega_{255}\}$, with
+\begin{equation*}
+	\omega_i=\sum^7_{k=0}[i]_k\beta_k
+	\quad\text{for $i\in\{0,\dotsc,255\}$}.
+\end{equation*}
+Then $\F_{2^d}=\{\omega_0,\dotsc,\omega_{2^d-1}\}$ for $d\in\{1,2,4,8\}$.
+
+An element $\omega_i\in\F_{2^8}$ is represented by the byte
+$[i]_7[i]_6\dotsb[i]_0$. Thus, addition of field elements corresponds to
+computing the XOR of bytes. Logarithm and exponent tables are used for
+multiplication. The array $\texttt{LOG}$ contains logarithms base $\alpha$:
+$\texttt{LOG}[i]$ is the byte that corresponds to $\log_\alpha\omega_i$ for
+$i\in\{1,\dotsc,255\}$, and $\texttt{LOG}[0]$ is arbitrarily set to zero.
+Similarly, $\texttt{EXP}[i]$ corresponds to $\alpha^i$ for
+$i\in\{0,\dotsc,254\}$. 
+
+\subsection{Functions}\
+
+\texttt{unsigned char mul(unsigned char x, unsigned char y)}
+
+\begin{inputs}
+	\texttt{x} & - & field element, \\
+	\texttt{y} & - & field element.
+\end{inputs}
+
+\begin{outputs}
+	The product of the two elements $x,y\in\F_{2^8}$ that correspond to the inputs.
+\end{outputs}
+
+\section{\transforms{}: Transforms over $\F_{2^8}$}
+
+The module \transforms{} implements several of the fast transforms proposed
+in~\cite{gao2010,lin2014,lin2016a,coxon2018b}. Define polynomials
+\begin{equation*}
+	N_i
+	=
+	\prod^{i-1}_{j=0}
+	\left(x-\omega_j\right)
+	\quad\text{and}\quad
+	X_i
+	=
+	\prod^7_{k=0}
+	\prod^{2^k[i]_k-1}_{j=0}
+	\left(x-\omega_j\right)
+\end{equation*}
+for $i\in\{0,\dotsc,255\}$. The polynomials $N_i$ are the Newton polynomials
+associated with the enumeration $\{\omega_0,\dotsc,\omega_{255}\}$ of
+$\F_{2^8}$. The polynomials $X_i$ were introduced by Lin, Chung and Han
+\cite{lin2014}, and referred to hereafter as the LCH basis polynomials.
+
+\subsection{Functions}\
+
+\texttt{unsigned int log2(unsigned int n)}
+
+Ceiling of base two logarithm.
+
+\begin{inputs}
+	\texttt{n} & - & an integer.
+\end{inputs}
+
+\begin{outputs}
+	The ceiling of $\log_2 n$.
+\end{outputs}
+
+\texttt{void \NtoX(int l, unsigned char[:]\ a)}
+
+Newton basis to LCH basis conversion.
+
+\begin{inputs}
+	\texttt{l} & - & length of the polynomial, \\
+	\texttt{a} & - & coefficient array.
+\end{inputs}
+
+\begin{outputs}
+	If initially $\texttt{a}[i]=f_i\in\F_{2^8}$ for $i\in\{0,\dotsc,\ell-1\}$, then
+	on termination $\texttt{a}[i]=h_i\in\F_{2^8}$ for $i\in\{0,\dotsc,\ell-1\}$ such
+	that
+	\begin{equation}\label{eqn:newton-lch}
+		\sum^{\ell-1}_{i=0}f_iN_i
+		=\sum^{\ell-1}_{i=0}h_iX_i.
+	\end{equation}
+\end{outputs}
+
+\texttt{void \XtoN(int l, unsigned char[:]\ a)}
+
+LCH basis to Newton basis conversion.
+
+\begin{inputs}
+	\texttt{l} & - & length of the polynomial, \\
+	\texttt{a} & - & coefficient array.
+\end{inputs}
+
+\begin{outputs}
+	If initially $\texttt{a}[i]=h_i\in\F_{2^8}$ for $i\in\{0,\dotsc,\ell-1\}$, then
+	on termination $\texttt{a}[i]=f_i\in\F_{2^8}$ for $i\in\{0,\dotsc,\ell-1\}$ such
+	that \eqref{eqn:newton-lch} holds.
+\end{outputs}
+
+\texttt{void \LtoX(unsigned char shift, int c, int l, unsigned char[:]\ a)}
+
+Interpolation on the LCH basis.
+
+\begin{inputs}
+	\texttt{shift} & - & shift parameter,                \\
+	\texttt{c} & - & number of evaluations provided, \\
+	\texttt{l} & - & length of the polynomial,       \\
+	\texttt{a} & - & coefficient array of length $2^{\ceil{\log_2\ell}}$.
+\end{inputs}
+
+\begin{outputs}
+	Given $\texttt{shift}=\lambda\in\F_{2^8}$, $\texttt{a}[i]=f_i\in\F_{2^8}$ for
+	$i\in\{0,\dotsc,c-1\}$, and $\texttt{a}[i]=h_i\in\F_{2^8}$ for
+	$i\in\{c,\dotsc,\ell-1\}$, the function terminates with
+	$\texttt{a}[i]=h_i\in\F_{2^8}$ for $i\in\{0,\dotsc,c-1\}$ such that
+	\begin{equation}\label{eqn:lagrange-lch}
+		\sum^{\ell-1}_{i=0}
+		h_i
+		X_i\left(\omega_j+\lambda\right)
+		=
+		f_j
+		\quad
+		\text{for $j\in\{0,\dotsc,c-1\}$}.
+	\end{equation}
+\end{outputs} 
+
+\texttt{void \XtoL(unsigned char shift, int c, int l, unsigned char[:]\ a)}
+
+Evaluation on the LCH basis.
+
+\begin{inputs}
+	\texttt{shift} & - & shift parameter,                  \\
+	\texttt{c} & - & number of evaluations to compute, \\
+	\texttt{l} & - & length of the polynomial,         \\
+	\texttt{a} & - & coefficient array of length
+	$\max(\ell,2^{\ceil{\log_2c}})$.
+\end{inputs}
+
+\begin{outputs}
+	Given $\texttt{shift}=\lambda\in\F_{2^8}$ and $\texttt{a}[i]=h_i\in\F_{2^8}$ for
+	$i\in\{0,\dotsc,\ell-1\}$, the function terminates with
+	$\texttt{a}[i]=f_i\in\F_{2^8}$ for $i\in\{0,\dotsc,c-1\}$ such that
+	\eqref{eqn:lagrange-lch} holds.
+\end{outputs}
+
+\texttt{void \lsXtoL(unsigned char shift, int c, int l, unsigned char[:]~a)}
+
+In-place evaluation on the LCH basis.
+
+\begin{inputs}
+	\texttt{shift} & - & shift parameter,                  \\
+	\texttt{c}     & - & number of evaluations to compute, \\
+	\texttt{l}     & - & length of the polynomial,         \\
+	\texttt{a}     & - & coefficient array.
+\end{inputs}
+
+\begin{outputs}
+	Given $\texttt{shift}=\lambda\in\F_{2^8}$, $\texttt{a}[i]=h_i\in\F_{2^8}$ for
+	$i\in\{0,\dotsc,\ell-1\}$, and $\texttt{a}[i]\in\F_{2^8}$ for
+	$i\in\{c,\dotsc,\ell-1\}$ (i.e, their value does not matter), the function terminates with
+	$\texttt{a}[i]=f_i\in\F_{2^8}$ for $i\in\{0,\dotsc,c-1\}$ such that
+	\eqref{eqn:lagrange-lch} holds, while $\texttt{a}[c],\dotsc,\texttt{a}[\ell-1]$
+	retain their initial values if $c<\ell$.
+\end{outputs}
+
+\texttt{void \lsLtoX(unsigned char shift, int c, int l, unsigned char[:]~a)}
+
+In-place interpolation on the LCH basis.
+
+\begin{inputs}
+	\texttt{shift} & - & shift parameter,                \\
+	\texttt{c}     & - & number of evaluations provided, \\
+	\texttt{l}     & - & length of the polynomial,       \\
+	\texttt{a}     & - & coefficient array.
+\end{inputs}
+
+\begin{outputs}
+	Given $\texttt{shift}=\lambda\in\F_{2^8}$, $\texttt{a}[i]=f_i\in\F_{2^8}$ for
+	$i\in\{0,\dotsc,c-1\}$, and $\texttt{a}[i]=h_i\in\F_{2^8}$ for
+	$i\in\{c,\dotsc,\ell-1\}$, the function terminates with
+	$\texttt{a}[i]=h_i\in\F_{2^8}$ for $i\in\{0,\dotsc,c-1\}$ such that
+	\eqref{eqn:lagrange-lch} holds, while $\texttt{a}[c],\dotsc,\texttt{a}[\ell-1]$ 
+	retain their initial values.
+\end{outputs} 
+
+\texttt{void \Taylor(int t, int l, unsigned char[:]\ a)}
+
+Generalised Taylor expansion at $x^{2^t}-x$.
+
+\begin{inputs}
+	\texttt{t} & - & exponent,                 \\
+	\texttt{l} & - & length of the polynomial, \\
+	\texttt{a} & - & coefficient array.
+\end{inputs}
+
+\begin{outputs}
+	If initially $\texttt{a}[i]=f_i\in\F_{2^8}$ for $i\in\{0,\dotsc,\ell-1\}$, then
+	on termination $\texttt{a}[i]=h_i\in\F_{2^8}$ for $i\in\{0,\dotsc,\ell-1\}$ such
+	that
+	\begin{equation}\label{eqn:taylor}
+		\sum^{\ell-1}_{i=0}f_ix^i
+		=
+		\sum^{\ell-1}_{i=0}
+		h_i
+		x^{i-2^t\floor{i/2^t}}
+		\left(x^{2^t}-x\right)^{\floor{i/2^t}}.
+	\end{equation}
+\end{outputs}
+
+\texttt{void InverseTaylorExpansion(int t, int l, unsigned char[:]\ a)}
+
+Inverse generalised Taylor expansion at $x^{2^t}-x$.
+
+\begin{inputs}
+	\texttt{t} & - & exponent,                 \\
+	\texttt{l} & - & length of the polynomial, \\
+	\texttt{a} & - & coefficient array.
+\end{inputs}
+
+\begin{outputs}
+	If initially $\texttt{a}[i]=h_i\in\F_{2^8}$ for $i\in\{0,\dotsc,\ell-1\}$, then
+	on termination $\texttt{a}[i]=f_i\in\F_{2^8}$ for $i\in\{0,\dotsc,\ell-1\}$ such
+	that \eqref{eqn:taylor} holds.
+\end{outputs}
+
+\texttt{void \MtoX(int l, unsigned char[:]\ a)}
+
+Monomial basis to LCH basis conversion.
+
+\begin{inputs}
+	\texttt{l} & - & length of the polynomial, \\
+	\texttt{a} & - & coefficient array.
+\end{inputs}
+
+\begin{outputs}
+	If initially $\texttt{a}[i]=f_i\in\F_{2^8}$ for $i\in\{0,\dotsc,\ell-1\}$, then
+	on termination $\texttt{a}[i]=h_i\in\F_{2^8}$ for $i\in\{0,\dotsc,\ell-1\}$ such
+	that $\sum^{\ell-1}_{i=0}f_ix^i=\sum^{\ell-1}_{i=0}h_iX_i$.
+\end{outputs}
+
+\texttt{void \XtoM(int l, unsigned char[:]\ a)}
+
+LCH basis to monomial basis conversion.
+
+\begin{inputs}
+	\texttt{l} & - & length of the polynomial, \\
+	\texttt{a} & - & coefficient array.
+\end{inputs}
+
+\begin{outputs}
+	If initially $\texttt{a}[i]=h_i\in\F_{2^8}$ for $i\in\{0,\dotsc,\ell-1\}$, then
+	on termination $\texttt{a}[i]=f_i\in\F_{2^8}$ for $i\in\{0,\dotsc,\ell-1\}$ such
+	that $\sum^{\ell-1}_{i=0}h_iX_i=\sum^{\ell-1}_{i=0}f_ix^i$.
+\end{outputs}
+
+\texttt{void TaylorExpansionHighCoeffs(int t, int c, int l, unsigned char[:]\
+	a)}
+
+High coefficients of the generalised Taylor expansion at $x^{2^t}-x$.
+
+\begin{inputs}
+	\texttt{t} & - & exponent,                 \\
+	\texttt{c} & - & cut-off,                  \\
+	\texttt{l} & - & length of the polynomial, \\
+	\texttt{a} & - & coefficient array.
+\end{inputs}
+
+\begin{outputs}
+	If initially $\texttt{a}[i]=f_i\in\F_{2^8}$ for ${i\in\{c,\dotsc,\ell-1\}}$,
+	then on termination $\texttt{a}[i]=h_i\in\F_{2^8}$ for $i\in\{c,\dotsc,\ell-1\}$
+	such that
+	\begin{equation}\label{eqn:taylor}
+		\sum^{\ell-1}_{i=c}f_ix^i
+		=
+		\sum^{\ell-1}_{i=0}
+		h_i
+		x^{i-2^t\floor{i/2^t}}
+		\left(x^{2^t}-x\right)^{\floor{i/2^t}},
+	\end{equation}
+	for some $h_0,\dots,h_{c-1}\in\F_{2^8}$, while
+	$\texttt{a}[0],\dotsc,\texttt{a}[c-1]$ retain their initial values.
+\end{outputs}
+
+\texttt{void \MtoX HighCoeffs(int c, int l, unsigned char[:]\ a)}
+
+Monomial basis to LCH basis conversion.
+
+\begin{inputs}
+	\texttt{c} & - & cut-off,                  \\
+	\texttt{l} & - & length of the polynomial, \\
+	\texttt{a} & - & coefficient array.
+\end{inputs}
+
+\begin{outputs}
+	If initially $\texttt{a}[i]=f_i\in\F_{2^8}$ for ${i\in\{c,\dotsc,\ell-1\}}$,
+	then on termination $\texttt{a}[i]=h_i\in\F_{2^8}$ for $i\in\{c,\dotsc,\ell-1\}$
+	such that
+	$\sum^{\ell-1}_{i=c}f_ix^i=\sum^{\ell-1}_{i=0}h_iX_i$ for some
+	$h_0,\dots,h_{c-1}\in\F_{2^8}$, while $\texttt{a}[0],\dotsc,\texttt{a}[c-1]$
+	retain their initial values.
+\end{outputs}
+
+\section{\hermite{}: Hermite interpolation and evaluation over $\F_{2^8}$}
+
+The module \hermite{} is an implementation of the Hermite interpolation and
+evaluation algorithms proposed in \cite{coxon2018}, specialised to $\F_{2^8}$
+and its subfields. These algorithms reduce instances of the Hermite problems to
+instances of regular (i.e., without the presence of derivatives) interpolation
+and evaluation problems. We implement these reduction, and use the \transforms{}
+module to solve the problems they admit. The algorithms used in the module are
+more general than their counterparts in~\cite{coxon2018}, since they include an
+additional parameter $\ell$ that accounts for polynomial length.
+
+For $i\in\N$, let $D^i:\F_{2^8}[x]\rightarrow\F_{2^8}[x]$ be the map that sends
+$f\in\F_{2^8}[x]$ to the coefficient of $y^i$ in $f(x+y)\in\F_{2^8}[x][y]$,
+called the $i$th Hasse derivative on $\F_{2^8}[x]$.
+
+\subsection{Functions}\
+
+\texttt{void Evaluate(int c, int l, unsigned char[:]\ a)}
+
+Algorithm 1.
+
+\begin{inputs}
+	\texttt{c} & - & number of evaluations to compute, \\
+	\texttt{l} & - & length of the polynomial,         \\
+	\texttt{a} & - & coefficient array.
+\end{inputs}
+
+\begin{outputs}
+	If initially $\texttt{a}[i]=f_i\in\F_{2^8}$ for $i\in\{0,\dotsc,\ell-1\}$, then
+	on termination $\texttt{a}[i]=f(\omega_i)\in\F_{2^8}$ for
+	$f=\sum^{\ell-1}_{i=0}f_ix^i$ and $i\in\{0,\dotsc,c-1\}$.
+\end{outputs}
+
+\texttt{void Interpolate(int c, int l, unsigned char[:]\ a)}
+
+Algorithm 3.
+
+\begin{inputs}
+	\texttt{c} & - & number of evaluations provided, \\
+	\texttt{l} & - & length of the polynomial,       \\
+	\texttt{a} & - & coefficient array.
+\end{inputs}
+
+\begin{outputs}
+	If initially $\texttt{a}[i]=h_i\in\F_{2^8}$ for $i\in\{0,\dotsc,c-1\}$, and
+	$\texttt{a}[i]=f_i\in\F_{2^8}$ for $i\in\{c,\dotsc,\ell-1\}$, then on
+	termination $\texttt{a}[i]=f_i\in\F_{2^8}$ for $i\in\{0,\dotsc,c-1\}$ such that
+	$f=\sum^{\ell-1}_{i=0}f_ix^i$ satisfies $f(\omega_i)=h_i$ for
+	$i\in\{0,\dotsc,c-1\}$.
+\end{outputs}
+
+\texttt{void PrepareLeft(int d, int n, int c, int l, unsigned char[:]\ a)}
+
+The function \textsf{PrepareLeft} from Algorithm 2.
+
+\texttt{void PrepareRight(int d, int n, int c, int l, unsigned char[:]\ a)}
+
+The function \textsf{PrepareRight} from Algorithm 4.
+
+\texttt{void HermiteEvaluate(int d, int n, int c, int l, unsigned char[:]\ a)}
+
+Algorithm 2.
+
+\begin{inputs}
+	\texttt{d} & - & field degree,                     \\
+	\texttt{c} & - & number of evaluations to compute, \\
+	\texttt{l} & - & length of the polynomial,         \\
+	\texttt{a} & - & coefficient array of length
+	$2^{\lceil\log_2\lceil\ell/2^d\rceil\rceil+d}$.
+\end{inputs}
+
+\begin{outputs}
+	If initially $\texttt{a}[i]=f_i\in\F_{2^8}$ for $i\in\{0,\dotsc,\ell-1\}$, then
+	on termination
+	$\texttt{a}[i]=(D^{i\bdiv{2^d}}f)(\omega_{i\bmod{2^d}})\in\F_{2^8}$ for
+	$f=\sum^{\ell-1}_{i=0}f_ix^i$ and $i\in\{0,\dotsc,c-1\}$.
+\end{outputs}
+
+\texttt{void HermiteInterpolate(int d, int n, int c, int l, unsigned char[:]\
+	a)}
+
+Algorithm 4.
+
+\begin{inputs}
+	\texttt{d} & - & field degree,                   \\
+	\texttt{c} & - & number of evaluations provided, \\
+	\texttt{l} & - & length of the polynomial,       \\
+	\texttt{a} & - & coefficient array of length
+	$2^{\lceil\log_2\lceil\ell/2^d\rceil\rceil+d}$.
+\end{inputs}
+
+\begin{outputs}
+	If initially $\texttt{a}[i]=h_i\in\F_{2^8}$ for $i\in\{0,\dotsc,c-1\}$, and
+	$\texttt{a}[i]=f_i\in\F_{2^8}$ for $i\in\{c,\dotsc,\ell-1\}$, then on
+	termination $\texttt{a}[i]=f_i\in\F_{2^8}$ for $i\in\{0,\dotsc,c-1\}$ such that
+	$f=\sum^{\ell-1}_{i=0}f_ix^i$ satisfies
+	$(D^{i\bdiv{2^d}}f)(\omega_{i\bmod{2^d}})=h_i$ for $i\in\{0,\dotsc,c-1\}$.
+\end{outputs}
+
+\section{\encode{}: Systematic encoding of multiplicity codes over $\F_{2^8}$}
+
+The module \encode{} is an implementation of the systematic encoding algorithm
+for multiplicity codes proposed in \cite{coxon2017}, specialised to codes over
+$\F_{2^8}$ and its subfields. To encode, the algorithm solves a multivariate
+Hermite interpolation problem, followed by a multivariate Hermite evaluation
+problem. Both these problems are solved by algorithms that reduce the
+multivariate problems to instances of the univariate problems. The module
+\hermite{} is used to solve the univariate problems. The reduction also relies
+on the use of a multivariate Newton-like basis. The module \transforms{} is used to
+perform conversions between this basis and the monomial basis.
+
+The ring of polynomials over $\F_q$ in indeterminates $x_1,\dotsc,x_m$ is
+denoted by $\F_q[\vec{x}]=\F_q[x_1,\dotsc,x_m]$. Define
+$\vec{x}^{\vec{i}}=x^{i_1}_1\dotsm x^{i_m}_m$ for
+$\vec{i}=(i_1,\dotsc,i_m)\in\N^m$. For $\vec{i}\in\N^m$, let
+$D^{\vec{i}}:\F_q[\vec{x}]\rightarrow\F_q[\vec{x}]$ be the map that sends
+$f\in\F_q[\vec{x}]$ to the coefficient of $\vec{y}^{\vec{i}}$ in
+$f(\vec{x}+\vec{y})\in\F_q[\vec{x}][\vec{y}]$, called the $\vec{i}$th Hasse
+derivative on $\F_q[\vec{x}]$. Let $\F_q[\vec{x}]_\ell$ denote the space of
+polynomials in $\F_q[\vec{x}]$ of total degree less than $\ell$. The weight of a
+vector $\vec{i}\in\N^m$, denoted $\left|\vec{i}\right|$, is defined to be the
+sum of its entries. Define
+$S_{m,s}=\{\vec{s}\in\N^m\mid\left|\vec{s}\right|<s\}$ for positive $s\in\N$.
+Then for $q$ a prime power and positive $m,\ell,s\in\N$ such that $\ell\leq sq$,
+the corresponding multiplicity code is
+\begin{equation*}
+	\mathrm{Mult}(q,m,\ell,s)
+	=
+	\left\{
+		\left(
+			\left(
+				(D^{\vec{s}}f)(\vec{\omega})
+			\right)_{\vec{s}\in S_{m,s}}
+		\right)_{\vec{\omega}\in\F^m_q}
+		\mid
+		f\in\F_q[\vec{x}]_\ell
+	\right\}.
+\end{equation*}
+
+This module is limited to multiplicity codes with $q=2^d$ for some
+$d\in\{1,2,4,8\}$. Consequently, $q$ is assumed to be of this form hereafter. We
+index the elements of $\F^m_q$ by vectors in $\{0,\dotsc,q-1\}^m$ by defining
+$\vec{\omega}_{\vec{i}}=(\omega_{i_1},\dotsc,\omega_{i_m})$ for
+$\vec{i}=(i_1,\dotsc,i_m)\in\{0,\dotsc,q-1\}^m$. The class \texttt{Codeword},
+which subclasses NumPy's ndarray, is used to store codewords (i.e., elements) of
+a multiplicity code. In particular, a codeword is represented by a
+one-dimensional ndarray of length $(qs)^m$. This is roughly $m!$ times the
+length of the code, so much memory is wasted. If an array represents the
+codeword corresponding to $f\in\F_q[\vec{x}]$, then the index of
+$(D^{\vec{s}}f)(\vec{\omega}_{\vec{i}})$ in the array is
+$\sum^m_{k=1}\left(i_k+s_kq\right)(sq)^{k-1}$, where $\vec{s}=(s_1,\dotsc,s_m)$
+and $\vec{i}=(i_1,\dotsc,i_m)$. If in addition $\sum^m_{k=1}i_k+s_kq<\ell$, the
+entry is part of the message of the codeword.
+
+For $\vec{s}=(s_1,\dotsc,s_m)\in\N^m$ and
+$\vec{i}=(i_1,\dotsc,i_m)\in\{0,\dotsc,q-1\}^m$, define
+\begin{equation*}
+	N_{\vec{i}+\vec{s}q}
+	=N_{i_1}(x_1)\dotsm N_{i_m}(x_m)
+	\left(x^q_1-x_1\right)^{s_1}\dotsm\left(x^q_m-x_m\right)^{s_m}.
+\end{equation*}
+The multivariate Newton basis of $\F_q[\vec{x}]$ defined in~\cite{coxon2017} is then equal to the set of all such polynomials.
+
+
+\subsection{Functions}\
+
+\texttt{void MonomialInterpolate(int d, int l, unsigned char[:]\ a)}
+
+Univariate interpolation with respect to the monomial basis.
+
+\begin{inputs}
+	\texttt{d} & - & field degree,              \\
+	\texttt{l} & - & length of the polynomial,  \\
+	\texttt{a} & - & coefficient array.
+\end{inputs}
+
+\begin{outputs}
+	If initially $\texttt{a}[i]=h_i\in\F_{2^8}$ for $i\in\{0,\dotsc,\ell-1\}$, then
+	on termination $\texttt{a}[i]=f_i\in\F_{2^8}$ for $i\in\{0,\dotsc,\ell-1\}$ such
+	that $f=\sum^{\ell-1}_{i=0}f_ix^i$ satisfies
+	$(D^{i\bdiv{2^d}}f)(\omega_{i\bmod{2^d}})=h_i$ for $i\in\{0,\dotsc,\ell-1\}$.
+\end{outputs}
+
+\texttt{void MonomialEvaluate(int d, int l, int s, unsigned char[:]\ a)}
+
+Univariate evaluation with respect to the monomial basis.
+
+\begin{inputs}
+	\texttt{d} & - & field degree,              \\
+	\texttt{l} & - & length of the polynomial,  \\
+	\texttt{s} & - & bound on derivative order, \\
+	\texttt{a} & - & coefficient array.
+\end{inputs}
+
+\begin{outputs}
+	If initially $\texttt{a}[i]=f_i\in\F_{2^8}$ for $i\in\{0,\dotsc,\ell-1\}$, then
+	on termination
+	$\texttt{a}[i]=(D^{i\bdiv{2^d}}f)(\omega_{i\bmod{2^d}})\in\F_{2^8}$ for
+	$f=\sum^{\ell-1}_{i=0}f_ix^i$ and $i\in\{0,\dotsc,2^ds-1\}$.
+\end{outputs}
+
+\texttt{void SmallMonomialToNewton(int l, unsigned char[:]\ a)}
+
+Conversion from monomial to Newton basis for $\ell\leq 2^8$.
+
+\begin{inputs}
+	\texttt{l} & - & length of the polynomial, \\
+	\texttt{a} & - & coefficient array.
+\end{inputs}
+
+\begin{outputs}
+	If initially $\texttt{a}[i]=f_i\in\F_{2^8}$ for $i\in\{0,\dotsc,\ell-1\}$, then
+	on termination $\texttt{a}[i]=h_i\in\F_{2^8}$ such that
+	$\sum^{\ell-1}_{i=0}h_iN_i=\sum^{\ell-1}_{i=0}f_ix^i$.
+\end{outputs}
+
+\texttt{void MonomialToNewton(int d, int l, unsigned char[:]\ a)}
+
+Conversion from monomial to Newton basis.
+
+\begin{inputs}
+	\texttt{d} & - & field degree,             \\
+	\texttt{l} & - & length of the polynomial, \\
+	\texttt{a} & - & coefficient array.
+\end{inputs}
+
+\begin{outputs}
+	If initially $\texttt{a}[i]=f_i\in\F_{2^8}$ for $i\in\{0,\dotsc,\ell-1\}$, then
+	on termination $\texttt{a}[i]=h_i\in\F_{2^8}$ such that
+	\begin{equation}\label{eqn:gen-newton-monomial}
+		\sum^{\ell-1}_{i=0}f_ix^i
+		=
+		\sum^{\ell-1}_{i=0}
+		h_i
+		N_{i-2^d\floor{i/2^d}}
+		\left(x^{2^d}-x\right)^{\floor{i/2^d}}.
+	\end{equation}
+\end{outputs}
+
+\texttt{void SmallNewtonToMononial(int l, unsigned char[:]\ a)}
+
+Conversion from Newton to monomial basis for $\ell\leq 2^8$.
+
+\begin{inputs}
+	\texttt{l} & - & length of the polynomial, \\
+	\texttt{a} & - & coefficient array.
+\end{inputs}
+
+\begin{outputs}
+	If initially $\texttt{a}[i]=h_i\in\F_{2^8}$ for $i\in\{0,\dotsc,\ell-1\}$, then
+	on termination $\texttt{a}[i]=f_i\in\F_{2^8}$ such that
+	$\sum^{\ell-1}_{i=0}f_ix^i=\sum^{\ell-1}_{i=0}h_iN_i$.
+\end{outputs}
+
+\texttt{void NewtonToMonomial(int d, int l, unsigned char[:]\ a)}
+
+Conversion from Newton to monomial basis.
+
+\begin{inputs}
+	\texttt{d} & - & field degree,             \\
+	\texttt{l} & - & length of the polynomial, \\
+	\texttt{a} & - & coefficient array.
+\end{inputs}
+
+\begin{outputs}
+	If initially $\texttt{a}[i]=h_i\in\F_{2^8}$ for $i\in\{0,\dotsc,\ell-1\}$, then
+	on termination $\texttt{a}[i]=f_i\in\F_{2^8}$ such that
+	\eqref{eqn:gen-newton-monomial} holds.
+\end{outputs}
+
+\texttt{void NewtonInterpolate(int d, int l, unsigned char[:]\ a)}
+
+Univariate interpolation with respect to the Newton basis.
+
+\begin{inputs}
+	\texttt{d} & - & field degree,             \\
+	\texttt{l} & - & length of the polynomial, \\
+	\texttt{a} & - & coefficient array.
+\end{inputs}
+
+\begin{outputs}
+	If initially $\texttt{a}[i]=h_i\in\F_{2^8}$ for $i\in\{0,\dotsc,\ell-1\}$, then
+	on termination $\texttt{a}[i]=f_i\in\F_{2^8}$ such that
+	\begin{equation}\label{eqn:univariate-newton}
+		f
+		=
+		\sum^{\ell-1}_{i=0}
+		f_i
+		N_{i-2^d\floor{i/2^d}}
+		\left(x^{2^d}-x\right)^{\floor{i/2^d}}
+	\end{equation}
+	satisfies $(D^{i\bdiv{2^d}}f)(\omega_{i\bmod{2^d}})=h_i$ for
+	$i\in\{0,\dotsc,\ell-1\}$	
+\end{outputs}
+
+\texttt{void NewtonEvaluate(int d, int l, int s, unsigned char[:]\ a)}
+
+Univariate evaluation with respect to the Newton basis.
+
+\begin{inputs}
+	\texttt{d} & - & field degree,              \\
+	\texttt{l} & - & length of the polynomial,  \\
+	\texttt{s} & - & bound on derivative order, \\
+	\texttt{a} & - & coefficient array.
+\end{inputs}
+
+\begin{outputs}
+	If initially $\texttt{a}[i]=f_i\in\F_{2^8}$ for $i\in\{0,\dotsc,\ell-1\}$, then
+	on termination $\texttt{a}[i]=(D^{i\bdiv{2^d}}f)(\omega_{i\bmod{2^d}})$ for the
+	polynomial $f$ defined by \eqref{eqn:univariate-newton} and
+	$i\in\{0,\dotsc,2^ds-1\}$.
+\end{outputs}
+
+\texttt{InfoSet(m, l, b)}
+
+Generator function that yields
+\begin{equation*}
+	\left(
+	i_1+i_2b+\dotsb+i_mb^{m-1},
+	i_1+\dotsb+i_m
+	\right)
+\end{equation*}
+for all $(i_1,\dotsc,i_m)\in\N^m$ such that $i_1+\dotsb+i_m<\ell$.
+
+\texttt{RecoverPolynomial(d, m, l, C)}
+
+Computes the polynomial that corresponds to a message.
+
+\begin{inputs}
+	\texttt{d} & - & field degree,                                                 
+	\\
+	\texttt{m} & - & number of variables,                                          
+	\\
+	\texttt{l} & - & polynomial degree bound,                                      
+	\\
+	\texttt{C} & - & a codeword array containing a message, with all other entries
+	set to zero.
+\end{inputs}
+
+\begin{outputs}
+	Let $b=\texttt{C.b}$, $I=\{\vec{i}\in\N^m\mid\left|\vec{i}\right|<\ell\}$, and
+	define $\pi:\N^m\rightarrow\N$ by
+	$(i_1,\dotsc,i_m)\mapsto\sum^m_{k=1}i_kb^{k-1}$. Suppose that initially
+	$\texttt{C}[i]=h_i\in\F_{2^8}$ for $i\in\pi(I)$, while all remaining entries of
+	the array are zero. Then on termination, $\texttt{C}[i]=f_i\in\F_{2^8}$ for
+	$i\in\pi(I)$ such that the polynomial
+	\begin{equation}\label{eqn:multivariate-newton}
+		f=\sum_{\vec{i}\in I}f_{\pi(\vec{i})}N_{\vec{i}}
+	\end{equation}
+	satisfies
+	$(D^{\vec{i}\bdiv{2^d}}f)(\vec{\omega}_{\vec{i}\bmod{2^d}})=h_{\pi(\vec{i})}$
+	for $\vec{i}\in I$, while all remaining entries of the array are zero.
+\end{outputs}
+
+\texttt{EvalSet(d, m, l, s, b)}
+
+Generator function that yields
+\begin{equation*}
+	\left(
+	i_1+i_2b+\dotsb+i_mb^{m-1},
+	i_1+\dotsb+i_m,
+	\floor{i_1/2^d}+\dotsb+\floor{i_m/2^d}
+	\right)
+\end{equation*}
+for all $(i_1,\dotsc,i_m)\in\N^m$ such that $i_1+\dotsb+i_m<\ell$ and
+$\floor{i_1/2^d}+\dotsb+\floor{i_m/2^d}<s$.
+
+\texttt{EncodePolynomial(d, m, l, s, C)}
+
+Computes the codeword that corresponds to a polynomial.
+
+\begin{inputs}
+	\texttt{d} & - & field degree,                                                 
+	\\
+	\texttt{m} & - & number of variables,                                          
+	\\
+	\texttt{l} & - & polynomial degree bound,                                      
+	\\
+	\texttt{s} & - & derivative order bound,                                       
+	\\
+	\texttt{C} & - & a codeword array containing the coefficients of a polynomial.
+\end{inputs}
+
+\begin{outputs}
+	Let $b=\texttt{C.b}$, $I=\{\vec{i}\in\N^m\mid\left|\vec{i}\right|<\ell\}$,
+	$C=\{\vec{i}+2^d\vec{s}\mid\vec{i}\in\{0,\dots,2^d-1\}^m,\vec{s}\in S_{m,s}\}$,
+	and define $\pi:\N^m\rightarrow\N$ by
+	$(i_1,\dotsc,i_m)\mapsto\sum^m_{k=1}i_kb^{k-1}$. Suppose that initially
+	$\texttt{C}[i]=f_i\in\F_{2^8}$ for $i\in\pi(I)$, while all remaining entries of
+	the array are zero. Then on termination, $\texttt{C}[i]=h_i\in\F_{2^8}$ for
+	$i\in\pi(C)$ such that the polynomial \eqref{eqn:multivariate-newton} satisfies
+	$(D^{\vec{i}\bdiv{2^d}}f)(\vec{\omega}_{\vec{i}\bmod{2^d}})=h_{\pi(\vec{i})}$
+	for $\vec{i}\in C$.
+\end{outputs}
+
+\texttt{SystematicallyEncode(C)}
+
+Systematic encoding algorithm.
+
+\begin{inputs}
+	\texttt{C} & - & a codeword array containing a message, with all other entries
+	set to zero.
+\end{inputs}
+
+\begin{outputs}
+	The array \texttt{C} equal to systematic encoding of the message.
+\end{outputs}
+
+\bibliographystyle{amsplain}
+
+\begin{thebibliography}{1}
+	
+	\bibitem{coxon2017}
+	Nicholas Coxon, \emph{Fast systematic encoding of multiplicity codes}, J.
+	Symbolic
+	Comput. \textbf{94} (2019), 234--254.
+	
+	\bibitem{coxon2018}
+	Nicholas Coxon, \emph{Fast {H}ermite interpolation and evaluation over finite
+		fields of characteristic two}, J. Symbolic
+	Comput. \textbf{98} (2020), 270--283.
+	
+	\bibitem{coxon2018b}
+	Nicholas Coxon, \emph{Fast transforms over finite fields of characteristic two},
+	J. Symbolic	Comput., to appear.
+	
+	\bibitem{gao2010}
+	Shuhong Gao and Todd Mateer, \emph{Additive fast {F}ourier transforms over
+		finite fields}, IEEE Trans. Inform. Theory \textbf{56} (2010), no.~12,
+	6265--6272.
+	
+	\bibitem{lin2016a}
+	Sian-Jheng Lin, Tareq~Y. Al-Naffouri, Yunghsiang~S. Han, and Wei-Ho Chung,
+	\emph{Novel polynomial basis with fast {F}ourier transform and its
+		application to {R}eed--{S}olomon erasure codes}, IEEE Trans. Inform. Theory
+	\textbf{62} (2016), no.~11, 6284--6299.
+	
+	\bibitem{lin2014}
+	Sian-Jheng Lin, Wei-Ho Chung, and Yunghsiang~S. Han, \emph{Novel polynomial
+		basis and its application to {R}eed-{S}olomon erasure codes}, 55th {A}nnual
+	{IEEE} {S}ymposium on {F}oundations of {C}omputer {S}cience---{FOCS} 2014,
+	IEEE Computer Soc., Los Alamitos, CA, 2014, pp.~316--325.
+	
+\end{thebibliography}
+	
+\end{document}

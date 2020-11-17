@@ -1,0 +1,6 @@
+cpdef void Evaluate(int c, int l, unsigned char[:] f)
+cdef void Interpolate(int c, int l, unsigned char[:] f)
+cdef void PrepareLeft(int d, int n, int c, int l, unsigned char[:] f)
+cdef void PrepareRight(int d, int n, int c, int l, unsigned char[:] f)
+cpdef void HermiteEvaluate(int d, int n, int c, int l, unsigned char[:] f)
+cpdef void HermiteInterpolate(int d, int n, int c, int l, unsigned char[:] f)
